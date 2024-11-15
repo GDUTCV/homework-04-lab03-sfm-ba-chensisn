@@ -26,10 +26,18 @@ def get_init_image_ids(scene_graph: dict) -> (str, str):
     """
     max_pair = [None, None]  # dummy value
     """ YOUR CODE HERE """
-    
-
-
+    max_num_inliers = 0
+    for image_id1 in scene_graph.keys():
+        neighbors = scene_graph[image_id1]
+        for image_id2 in neighbors:
+            matches = load_matches(image_id1=image_id1, image_id2=image_id2)
+            num_inliers = matches.shape[0]
+            if num_inliers > max_num_inliers:
+                max_num_inliers = num_inliers
+                max_pair = (image_id1, image_id2)  # 使用元组完成赋值
     """ END YOUR CODE HERE """
+
+
     image_id1, image_id2 = sorted(max_pair)
     return image_id1, image_id2
 
@@ -78,10 +86,15 @@ def get_init_extrinsics(image_id1: str, image_id2: str, intrinsics: np.ndarray) 
 
     extrinsics2 = np.zeros(shape=[3, 4], dtype=float)
     """ YOUR CODE HERE """
-    
+    # 从本质矩阵中提取相机的旋转和位移
+    _, R, t, _ = cv2.recoverPose(essential_mtx, points2d_1, points2d_2, intrinsics)
 
+    # 将旋转矩阵和位移向量添加到extrinsics2中
+    extrinsics2[:3, :3] = R
+    extrinsics2[:3, 3] = t.flatten()  # 使用.flatten()转换为1D数组
 
     """ END YOUR CODE HERE """
+
     return extrinsics1, extrinsics2
 
 
@@ -154,9 +167,19 @@ def get_reprojection_residuals(points2d: np.ndarray, points3d: np.ndarray, intri
     """
     residuals = np.zeros(points2d.shape[0])
     """ YOUR CODE HERE """
-   
+    #  Convert points3D to camera coordinates.
+    camera_coords = np.matmul(rotation_mtx, points3d.T) + tvec.reshape(-1, 1)
 
+    # Project the 3D points to 2D using the intrinsic matrix
+    camera_coords_homogeneous = np.vstack((camera_coords, np.ones(camera_coords.shape[1])))  # 4xN
+    # Project points
+    projected_points = np.dot(intrinsics, camera_coords_homogeneous)  # 3xN
+    projected_points /= projected_points[2, :]  # normalize by the depth (homogeneous coordinate)
 
+    # Calculate the residuals between the projected points and the actual 2D points
+    projected_2d = projected_points[:2, :].T  # shape (N, 2) for easy comparison with points2d
+    # Compute the Euclidean distance residuals
+    residuals = np.linalg.norm(points2d - projected_2d, axis=1)
     """ END YOUR CODE HERE """
     return residuals
 
@@ -202,8 +225,22 @@ def solve_pnp(image_id: str, point2d_idxs: np.ndarray, all_points3d: np.ndarray,
         2. convert the returned rotation vector to rotation matrix using cv2.Rodrigues
         3. compute the reprojection residuals
         """
-       
+        success, rvec, tvec = cv2.solvePnP(selected_pts3d, selected_pts2d, intrinsics, None,
+                                           flags=cv2.SOLVEPNP_ITERATIVE)
 
+        if not success:
+            continue  # Skip if solvePnP fails
+
+        # Step 2: Convert the rotation vector to a rotation matrix
+        rotation_mtx, _ = cv2.Rodrigues(rvec)
+
+        # Step 3: Project the 3D points back to 2D
+        projected_points_homogeneous = np.dot(intrinsics, np.dot(rotation_mtx, selected_pts3d.T) + tvec.reshape(3, 1))
+        projected_points = projected_points_homogeneous[:2, :] / projected_points_homogeneous[2,
+                                                                 :]  # Normalize to get homogeneous coordinates
+
+        # Calculate reprojection residuals
+        residuals = np.linalg.norm(projected_points.T - selected_pts2d, axis=1)  # shape (N,)
 
         """ END YOUR CODE HERE """
 
@@ -254,8 +291,13 @@ def add_points3d(image_id1: str, image_id2: str, all_extrinsic: dict, intrinsics
     triangulate between the image points for the unregistered matches for image_id1 and image_id2 to get new points3d
     new_points3d = triangulate(..., kp_idxs1=matches[:, 0], kp_idxs2=matches[:, 1], ...)
     """
-    
-
+    new_points3d = triangulate(image_id1=image_id1,
+                               image_id2=image_id2,
+                               kp_idxs1=matches[:, 0],
+                               kp_idxs2=matches[:, 1],
+                               extrinsics1=all_extrinsic[image_id1],
+                               extrinsics2=all_extrinsic[image_id2],
+                               intrinsics=intrinsics)
 
     """ END YOUR CODE HERE """
 
@@ -285,10 +327,26 @@ def get_next_pair(scene_graph: dict, registered_ids: list):
     """
     max_new_id, max_registered_id, max_num_inliers = None, None, 0
     """ YOUR CODE HERE """
-    
+    # Convert registered_ids to a set for faster membership checking
+    registered_set = set(registered_ids)
 
+    # Iterate through the scene graph to find image pairs
+    for registered_id in registered_ids:
+        # Get the neighboring image IDs for the registered image
+        neighbors = scene_graph.get(registered_id, [])
 
-    
+        for new_id in neighbors:
+            # Check if the neighbor is not yet registered
+            if new_id not in registered_set:
+                # Get the number of inliers for this pair
+                matches = load_matches(registered_id, new_id)
+                num_inliers = matches.shape[0]
+                # Check if this pair has the highest number of inliers found so far
+                if num_inliers > max_num_inliers:
+                    max_num_inliers = num_inliers
+                    max_new_id = new_id
+                    max_registered_id = registered_id
+
     """ END YOUR CODE HERE """
     return max_new_id, max_registered_id
 

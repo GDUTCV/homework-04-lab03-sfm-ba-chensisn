@@ -14,7 +14,7 @@ PREDICTION_DIR = os.path.join(PROJECT_DIR, 'predictions')
 DATA_DIR = os.path.join(PROJECT_DIR, 'data')
 
 argparser = argparse.ArgumentParser()
-argparser.add_argument('--dataset', type=str, choices=['temple', 'mini-temple'])
+argparser.add_argument('--dataset', type=str, choices=['temple', 'mini-temple'],default='mini-temple')
 argparser.add_argument('--ba', action='store_true')
 args = argparser.parse_args()
 
@@ -118,9 +118,13 @@ def detect_keypoints(image_file: os.path):
     """ YOUR CODE HERE:
     Detect keypoints using cv2.SIFT_create() and sift.detectAndCompute
     """
-    
+    image = cv2.imread(image_file)
+    if image is None:
+        raise FileNotFoundError(f"Image file not found: {image_file}")
 
-
+        # 创建SIFT检测器
+    sift = cv2.SIFT_create()
+    keypoints, descriptors = sift.detectAndCompute(image, None)  # 检测关键点并计算描述符
     """ END YOUR CODE HERE. """
 
     keypoints = [encode_keypoint(kp=kp) for kp in keypoints]
@@ -167,21 +171,31 @@ def create_feature_matches(image_file1: os.path, image_file2: os.path, lowe_rati
     1. Run cv.BFMatcher() and matcher.knnMatch(descriptors1, descriptors2, 2)
     2. Filter the feature matches using the Lowe ratio test.
     """
-    
+    # Initialize BFMatcher
+    bf_matcher = cv2.BFMatcher()
 
+    # Get the two best matches for each descriptor
+    matches = bf_matcher.knnMatch(descriptors1, descriptors2, k=2)
+
+    # Apply Lowe's ratio test
+    for m, n in matches:
+        if m.distance < lowe_ratio * n.distance:
+            good_matches.append(m)
 
     """ END YOUR CODE HERE. """
+
     if len(good_matches) < min_matches:
         return match_id
 
     # image visualization of feature matching
     image1 = cv2.imread(image_file1)
     image2 = cv2.imread(image_file2)
+    matches1to2 = [[m] for m in good_matches]
     save_image = cv2.drawMatchesKnn(img1=image1, keypoints1=keypoints1, img2=image2, keypoints2=keypoints2,
-                                    matches1to2=good_matches, outImg=None,
+                                    matches1to2=matches1to2, outImg=None,
                                     flags=cv2.DRAW_MATCHES_FLAGS_NOT_DRAW_SINGLE_POINTS)
     cv2.imwrite(image_save_file, save_image)
-    good_matches = [match[0] for match in good_matches]
+    #good_matches = [match[0] for match in good_matches]
 
     # save the feature matches
     feature_matches = []
@@ -242,8 +256,8 @@ def create_ransac_matches(image_file1: os.path, image_file2: os.path,
     Perform goemetric verification by finding the essential matrix between keypoints in the first image and keypoints in
     the second image using cv2.findEssentialMatrix(..., method=cv2.RANSAC, threshold=ransac_threshold, ...)
     """
-    
-
+    essential_mtx, is_inlier = cv2.findEssentialMat(points1, points2, camera_intrinsics,
+                                                       method=cv2.RANSAC, threshold=ransac_threshold)
 
     """ END YOUR CODE HERE """
 
@@ -278,9 +292,17 @@ def create_scene_graph(image_files: list, min_num_inliers: int = 40):
     Add edges to <graph> if the minimum number of geometrically verified inliers between images is at least  
     <min_num_inliers> 
     """
-    
-
-    
+    for i in range(len(image_ids)):
+        id_1 = image_ids[i]
+        for j in range(i + 1, len(image_ids)):
+            id_2 = image_ids[j]
+            match_id = '{}_{}'.format(id_1, id_2)
+            match_save_file = os.path.join(RANSAC_MATCH_DIR, match_id + '.npy')
+            # 检查文件是否存在
+            if os.path.exists(match_save_file):
+                inliers = np.load(match_save_file)
+                if len(inliers) > min_num_inliers:
+                    graph.add_edge(i, j)
     """ END YOUR CODE HERE """
 
     graph_dict = {node: [] for node in image_ids}

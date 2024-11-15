@@ -44,8 +44,20 @@ def compute_ba_residuals(parameters: np.ndarray, intrinsics: np.ndarray, num_cam
     NOTE: DO NOT USE LOOPS 
     HINT: I used np.matmul; np.sum; np.sqrt; np.square, np.concatenate etc.
     """
-    
+    points3d_selected = points3d[points3d_idxs]
+    extrinsics_selected = extrinsics[camera_idxs]
 
-    
+    # Convert 3D points to homogeneous coordinates
+    points3d_homogeneous = np.concatenate([points3d_selected, np.ones((points3d_selected.shape[0], 1))],
+                                          axis=1)  # N x 4
+
+    # Project the 3D points into the image plane using extrinsics
+    projected_points = np.einsum('ijk,ik->ij', extrinsics_selected, points3d_homogeneous)  # N x 4 => N x 3
+
+    # Normalize to get 2D coordinates
+    projected_points_2d = projected_points[:, :2] / projected_points[:, 2:3]  # N x 2
+
+    # Compute the residuals (Euclidean distance between actual and projected points)
+    residuals = np.sqrt(np.sum(np.square(points2d - projected_points_2d), axis=1))
     """ END YOUR CODE HERE """
     return residuals
